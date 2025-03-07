@@ -4,7 +4,7 @@ use swh_graph::graph::*;
 use swh_graph::labels::EdgeLabel;
 use swh_graph::NodeType;
 
-use log::{error, debug};
+use log::{debug, error};
 
 use crate::env;
 
@@ -108,7 +108,7 @@ where
     let Some(rev_id) = get_rev(snap_dst, branch_name, graph_t) else {
         return None;
     };
-    let Some(dir) = get_dir(&graph_t.properties().swhid(rev_id).to_string(), graph_t) else{
+    let Some(dir) = get_dir(&graph_t.properties().swhid(rev_id).to_string(), graph_t) else {
         return None;
     };
     let mut path_node: HashMap<usize, String> = HashMap::new();
@@ -127,9 +127,10 @@ where
             for label in labels {
                 let name: String;
                 if let EdgeLabel::DirEntry(dir) = label {
-                    name =
-                        String::from_utf8_lossy(&graph_t.properties().label_name(dir.filename_id()))
-                            .to_string();
+                    name = String::from_utf8_lossy(
+                        &graph_t.properties().label_name(dir.filename_id()),
+                    )
+                    .to_string();
                 } else {
                     // We just care about labels that are giving the path
                     continue;
@@ -144,11 +145,10 @@ where
                 match graph_t.properties().node_type(succ) {
                     NodeType::Content => {
                         debug!("found a file: {}", path);
-                        if let Some(node_path) = paths.get(&path){
-                            if *node_path == succ{
+                        if let Some(node_path) = paths.get(&path) {
+                            if *node_path == succ {
                                 res.insert(path, env::Status::Found);
-                            }
-                            else{
+                            } else {
                                 res.insert(path, env::Status::Modified);
                             }
                         }

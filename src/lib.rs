@@ -2,14 +2,14 @@ pub mod env;
 pub mod file_modified;
 use chashmap::CHashMap;
 use csv::{ReaderBuilder, WriterBuilder};
+use indicatif::{ProgressBar, ProgressStyle};
+use log::{error, info, warn};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use swh_graph::graph::*;
-use indicatif::{ProgressBar, ProgressStyle};
-use log::error;
 
 pub fn retrieve_file_modified(
     path: &str,
@@ -109,7 +109,9 @@ pub fn retrieve_file_modified(
     Some(res)
 }
 
-pub fn all_modified<G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph + Sync>(
+pub fn all_modified<
+    G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph + Sync,
+>(
     data: CHashMap<String, Vec<(String, String, String, String)>>,
     graph_t: &G,
 ) where
@@ -126,27 +128,38 @@ pub fn all_modified<G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabe
         )
         .unwrap(),
     );
-    let csv_wrt = Arc::new(Mutex::new(WriterBuilder::new().has_headers(true).from_path("results/modified_files.csv").unwrap()));
-    data.into_iter().par_bridge().for_each(|(url, lines)|{
+    let amount_err_compare = AtomicUsize::new(0);
+    let csv_wrt = Arc::new(Mutex::new(
+        WriterBuilder::new()
+            .has_headers(true)
+            .from_path("results/modified_files.csv")
+            .unwrap(),
+    ));
+    data.into_iter().par_bridge().for_each(|(url, lines)| {
         let csv_wrt = csv_wrt.clone();
-        lines.into_iter().for_each(|line|{
+        lines.into_iter().for_each(|line| {
             let paths = file_modified::map_commit(line.clone(), graph_t).unwrap();
-            let Some (res) = file_modified::compare_paths(&line.3, &line.1, &paths, graph_t) else{
-                error!("Couldn't compare paths for url: {} and snap_dst: {} and branch: {}", url, line.3, line.1);
-                return
+            let Some(res) = file_modified::compare_paths(&line.3, &line.1, &paths, graph_t) else {
+                warn!(
+                    "Couldn't compare paths for url: {} and snap_dst: {} and branch: {}",
+                    url, line.3, line.1
+                );
+                amount_err_compare.fetch_add(1, Ordering::Relaxed);
+                return;
             };
-            let rows_to_write: Vec<_> = res.into_iter()
+            let rows_to_write: Vec<_> = res
+                .into_iter()
                 .filter(|(_, status)| *status != env::Status::Found)
                 .map(|(path, status)| env::Row {
                     origin: url.clone(),
-                    revision:line.2.clone(),
-                    branch:line.1.clone(),
-                    snapshot_without:line.3.clone(),
+                    revision: line.2.clone(),
+                    branch: line.1.clone(),
+                    snapshot_without: line.3.clone(),
                     path,
-                    status
+                    status,
                 })
                 .collect();
-        
+
             if !rows_to_write.is_empty() {
                 if let Ok(mut writer) = csv_wrt.lock() {
                     for row in rows_to_write {
@@ -163,9 +176,19 @@ pub fn all_modified<G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabe
         bar.inc(1);
     });
     bar.finish_with_message("Done");
+    println!(
+        "Amount of altered commits that weren't checked: {}",
+        amount_err_compare.load(Ordering::Relaxed)
+    );
+    info!(
+        "Amount of altered commits that weren't checked: {}",
+        amount_err_compare.load(Ordering::Relaxed)
+    );
 }
 
-pub fn single_modified<G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph>(
+pub fn single_modified<
+    G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph,
+>(
     line: (String, String, String, String),
     graph_t: &G,
 ) where
@@ -177,22 +200,22 @@ pub fn single_modified<G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhL
 {
     let paths = file_modified::map_commit(line.clone(), graph_t).unwrap();
 
-    let Some (res) = file_modified::compare_paths(&line.3, &line.1, &paths, graph_t) else{
+    let Some(res) = file_modified::compare_paths(&line.3, &line.1, &paths, graph_t) else {
         println!("Couldn't compare paths");
-        return
+        return;
     };
     #[derive(Serialize)]
-    struct RowTmp{
+    struct RowTmp {
         path: String,
         status: env::Status,
     }
-    let mut csv_wrt = WriterBuilder::new().has_headers(true).from_path("test.csv").unwrap();
-    res.into_iter().for_each(|(path, status)|{
-        if status != env::Status::Found{
-            csv_wrt.serialize(RowTmp {
-                path,
-                status
-            }).unwrap();
+    let mut csv_wrt = WriterBuilder::new()
+        .has_headers(true)
+        .from_path("test.csv")
+        .unwrap();
+    res.into_iter().for_each(|(path, status)| {
+        if status != env::Status::Found {
+            csv_wrt.serialize(RowTmp { path, status }).unwrap();
         }
     });
     csv_wrt.flush().unwrap();

@@ -9,7 +9,7 @@ pub enum Status {
 }
 
 #[derive(Serialize)]
-pub struct Row{
+pub struct Row {
     pub origin: String,
     pub revision: String,
     pub branch: String,
