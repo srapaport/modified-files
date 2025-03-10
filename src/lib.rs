@@ -1,5 +1,6 @@
 pub mod env;
 pub mod file_modified;
+pub mod origin_grading;
 use chashmap::CHashMap;
 use csv::{ReaderBuilder, WriterBuilder};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -185,11 +186,11 @@ pub fn all_modified<
         amount_err_compare.load(Ordering::Relaxed)
     );
     println!(
-        "Amount of branch wihtout name: {}",
+        "Amount of branch without name: {}",
         env::ERR_BRANCH.load(Ordering::Relaxed)
     );
     info!(
-        "Amount of branch wihtout name: {}",
+        "Amount of branch without name: {}",
         env::ERR_BRANCH.load(Ordering::Relaxed)
     );
 }

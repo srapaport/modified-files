@@ -1,4 +1,7 @@
-use std::{collections::{HashMap, HashSet, VecDeque}, sync::atomic::Ordering};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    sync::atomic::Ordering,
+};
 
 use swh_graph::graph::*;
 use swh_graph::labels::EdgeLabel;
@@ -186,15 +189,17 @@ where
         for label in labels {
             let curr_branch: String;
             if let EdgeLabel::Branch(b) = label {
-                match String::from_utf8(props.label_name(b.filename_id())){
+                match String::from_utf8(props.label_name(b.filename_id())) {
                     Ok(branch) => curr_branch = branch,
                     Err(e) => {
                         env::ERR_BRANCH.fetch_add(1, Ordering::Relaxed);
-                        warn!("couldn't convert message in string for node {} {:?}", succ, e);
+                        warn!(
+                            "couldn't convert message in string for node {} {:?}",
+                            succ, e
+                        );
                         return None;
                     }
                 }
-
             } else {
                 continue;
             }
