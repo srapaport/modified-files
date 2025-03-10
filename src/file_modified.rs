@@ -1,10 +1,10 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::{collections::{HashMap, HashSet, VecDeque}, sync::atomic::Ordering};
 
 use swh_graph::graph::*;
 use swh_graph::labels::EdgeLabel;
 use swh_graph::NodeType;
 
-use log::{debug, error};
+use log::{debug, error, warn};
 
 use crate::env;
 
@@ -186,9 +186,15 @@ where
         for label in labels {
             let curr_branch: String;
             if let EdgeLabel::Branch(b) = label {
-                curr_branch = String::from_utf8(props.label_name(b.filename_id())).expect(
-                    &format!("couldn't convert message in string for node {}", succ),
-                );
+                match String::from_utf8(props.label_name(b.filename_id())){
+                    Ok(branch) => curr_branch = branch,
+                    Err(e) => {
+                        env::ERR_BRANCH.fetch_add(1, Ordering::Relaxed);
+                        warn!("couldn't convert message in string for node {} {:?}", succ, e);
+                        return None;
+                    }
+                }
+
             } else {
                 continue;
             }

@@ -184,6 +184,14 @@ pub fn all_modified<
         "Amount of altered commits that weren't checked: {}",
         amount_err_compare.load(Ordering::Relaxed)
     );
+    println!(
+        "Amount of branch wihtout name: {}",
+        env::ERR_BRANCH.load(Ordering::Relaxed)
+    );
+    info!(
+        "Amount of branch wihtout name: {}",
+        env::ERR_BRANCH.load(Ordering::Relaxed)
+    );
 }
 
 pub fn single_modified<

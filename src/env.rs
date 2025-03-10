@@ -1,3 +1,5 @@
+use std::sync::atomic::AtomicUsize;
+
 use serde::Serialize;
 
 #[derive(Default, Serialize, PartialEq)]
@@ -17,3 +19,5 @@ pub struct Row {
     pub path: String,
     pub status: Status,
 }
+
+pub static ERR_BRANCH: AtomicUsize = AtomicUsize::new(0);
