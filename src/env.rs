@@ -20,4 +20,14 @@ pub struct Row {
     pub status: Status,
 }
 
+#[derive(Serialize, Default)]
+pub struct Stats {
+    pub amount_contrib: usize,
+    pub amount_snap: usize,
+    pub amount_rel: usize,
+    pub amount_rev: usize,
+    pub freq_snap: f64,
+    pub freq_rev: f64,
+}
+
 pub static ERR_BRANCH: AtomicUsize = AtomicUsize::new(0);
