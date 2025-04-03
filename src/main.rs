@@ -42,14 +42,15 @@ fn main() {
 
     let start = Instant::now();
 
-    altered_history_analysis::all_modified(
-        altered_history_analysis::retrieve_file_modified(
-            // "/home/infres/rapaport/altered-history/results_2024/focus/classes",
-            "/infres/ir800/rapaport/results/FULL_2024_08/focus/classes",
-        )
-        .unwrap(),
-        &graph_t,
-    );
+    // altered_history_analysis::all_modified(
+    //     altered_history_analysis::retrieve_file_modified(
+    //         // "/home/infres/rapaport/altered-history/results_2024/focus/classes",
+    //         "/infres/ir800/rapaport/results/FULL_2024_08/focus/classes",
+    //     )
+    //     .unwrap(),
+    //     &graph_t,
+    // );
+    altered_history_analysis::all_grade(&graph_t);
 
     info!("Time elapsed: {:.2?}", start.elapsed());
 }

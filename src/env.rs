@@ -23,6 +23,8 @@ pub struct Row {
 #[derive(Serialize, Default)]
 pub struct Stats {
     pub amount_contrib: usize,
+    pub amount_author: usize,
+    pub amount_committer: usize,
     pub amount_snap: usize,
     pub amount_rel: usize,
     pub amount_rev: usize,

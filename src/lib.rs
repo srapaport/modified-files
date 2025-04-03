@@ -1,6 +1,6 @@
 pub mod env;
-pub mod file_modified;
-pub mod origin_grading;
+mod file_modified;
+mod origin_grading;
 use chashmap::CHashMap;
 use csv::{ReaderBuilder, WriterBuilder};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -220,12 +220,58 @@ pub fn single_modified<
     }
     let mut csv_wrt = WriterBuilder::new()
         .has_headers(true)
-        .from_path("test.csv")
+        .from_path(format!("{}.csv", line.2))
         .unwrap();
     res.into_iter().for_each(|(path, status)| {
         if status != env::Status::Found {
             csv_wrt.serialize(RowTmp { path, status }).unwrap();
         }
+    });
+    csv_wrt.flush().unwrap();
+}
+
+pub fn all_grade<
+    G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph + Sync,
+>(
+    graph: &G,
+) where
+    <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
+    <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
+    <G as SwhGraphWithProperties>::Strings: swh_graph::properties::Strings,
+    <G as SwhGraphWithProperties>::Persons: swh_graph::properties::Persons,
+    <G as SwhGraphWithProperties>::Timestamps: swh_graph::properties::Timestamps,
+{
+    let mut csv_wrt = match WriterBuilder::new().from_path("results/grades.csv") {
+        Ok(writer) => writer,
+        Err(e) => {
+            error!("couldn't create csv file: {:?}", e);
+            return;
+        }
+    };
+    #[derive(Serialize)]
+    struct Row{
+        origin: String,
+        amount_contrib: usize,
+        amount_author: usize,
+        amount_committer: usize,
+        amount_snap: usize,
+        amount_rel: usize,
+        amount_rev: usize,
+        freq_snap: f64,
+        freq_rev: f64,
+    }
+    origin_grading::grades(graph).into_iter().for_each(|(url, stats)|{
+        csv_wrt.serialize(Row{
+            origin: url.clone(),
+            amount_contrib: stats.amount_contrib,
+            amount_author: stats.amount_author,
+            amount_committer: stats.amount_committer,
+            amount_snap: stats.amount_snap,
+            amount_rel: stats.amount_rel,
+            amount_rev: stats.amount_rev,
+            freq_snap: stats.freq_snap,
+            freq_rev: stats.freq_rev,
+        }).expect(&format!("Couldn't serialize stats for {}", url));
     });
     csv_wrt.flush().unwrap();
 }
