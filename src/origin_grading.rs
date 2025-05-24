@@ -33,10 +33,8 @@ where
     let bar = ProgressBar::new(310_334_314);
     //let bar = ProgressBar::new(443);
     bar.set_style(
-        ProgressStyle::with_template(
-            "{wide_bar} {pos} {percent_precise}% {elapsed_precise} {eta}",
-        )
-        .unwrap(),
+        ProgressStyle::with_template("{wide_bar} {pos} {percent_precise}% {elapsed_precise} {eta}")
+            .unwrap(),
     );
 
     (0..graph.num_nodes())
@@ -55,20 +53,26 @@ where
                         if let EdgeLabel::Visit(visit) = label {
                             if visit.status() == VisitStatus::Full {
                                 let ts = visit.timestamp();
-                                first_snap = Some(std::cmp::min(ts, match first_snap{
-                                    Some(v) => v,
-                                    None => ts,
-                                }));
-                                last_snap = Some(std::cmp::max(ts, match last_snap{
-                                    Some(v) => v,
-                                    None => ts,
-                                }));
+                                first_snap = Some(std::cmp::min(
+                                    ts,
+                                    match first_snap {
+                                        Some(v) => v,
+                                        None => ts,
+                                    },
+                                ));
+                                last_snap = Some(std::cmp::max(
+                                    ts,
+                                    match last_snap {
+                                        Some(v) => v,
+                                        None => ts,
+                                    },
+                                ));
                             }
                         }
                     });
                 });
             if first_snap != None && last_snap != None {
-                let first_snap= first_snap.unwrap();
+                let first_snap = first_snap.unwrap();
                 let last_snap = last_snap.unwrap();
                 let mut contrib = HashSet::new();
                 let mut contrib_aut = HashSet::new();
@@ -80,39 +84,39 @@ where
                         continue;
                     }
                     visited.insert(node);
-                    graph.successors(node).into_iter().for_each(|succ|{
+                    graph.successors(node).into_iter().for_each(|succ| {
                         match graph.properties().node_type(succ) {
                             NodeType::Snapshot => to_visit.push(succ),
                             NodeType::Release => {
-                                if let Some(aut_id) = graph.properties().author_id(succ){
+                                if let Some(aut_id) = graph.properties().author_id(succ) {
                                     contrib.insert(aut_id);
                                     contrib_aut.insert(aut_id);
                                 }
-                                if let Some(com_id) = graph.properties().committer_id(succ){
+                                if let Some(com_id) = graph.properties().committer_id(succ) {
                                     contrib.insert(com_id);
                                     contrib_com.insert(com_id);
                                 }
                                 stats.amount_rel += 1;
                                 to_visit.push(succ);
-                            },
+                            }
                             NodeType::Revision => {
-                                if let Some(aut_id) = graph.properties().author_id(succ){
+                                if let Some(aut_id) = graph.properties().author_id(succ) {
                                     contrib.insert(aut_id);
                                     contrib_aut.insert(aut_id);
                                 }
-                                if let Some(com_id) = graph.properties().committer_id(succ){
+                                if let Some(com_id) = graph.properties().committer_id(succ) {
                                     contrib.insert(com_id);
                                     contrib_com.insert(com_id);
                                 }
-                                if let Some(ts) = graph.properties().committer_timestamp(succ){
-                                    if ts as u64 >= first_snap{
+                                if let Some(ts) = graph.properties().committer_timestamp(succ) {
+                                    if ts as u64 >= first_snap {
                                         stats.amount_rev += 1;
                                     }
                                 } else {
                                     no_timestamps_rev.fetch_add(1, Ordering::Relaxed);
                                 }
                                 to_visit.push(succ);
-                            },
+                            }
                             _ => (),
                         }
                     });
@@ -120,13 +124,13 @@ where
                 stats.amount_contrib = contrib.into_iter().count();
                 stats.amount_author = contrib_aut.into_iter().count();
                 stats.amount_committer = contrib_com.into_iter().count();
-                let duration = (last_snap - first_snap) / (60*60*24);
+                let duration = (last_snap - first_snap) / (60 * 60 * 24);
                 stats.freq_rev = (stats.amount_rev as f64) / (duration as f64);
                 stats.freq_snap = (stats.amount_snap as f64) / (duration as f64);
-                if let Some(url) = graph.properties().message(ori){
-                    if let Ok(url_str) = String::from_utf8(url){
+                if let Some(url) = graph.properties().message(ori) {
+                    if let Ok(url_str) = String::from_utf8(url) {
                         res.insert(url_str, stats);
-                    } else{
+                    } else {
                         no_readable_msg_ori.fetch_add(1, Ordering::Relaxed);
                     }
                 }

@@ -1,4 +1,5 @@
 pub mod env;
+pub mod models;
 mod file_modified;
 mod origin_grading;
 use chashmap::CHashMap;
