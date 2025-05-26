@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 use sqlx::postgres::PgPoolOptions;
 use std::env;
 use dotenv::dotenv;
-use rayon::prelude::*;
 
 #[allow(dead_code)]
 #[derive(sqlx::FromRow)]
@@ -98,8 +97,9 @@ pub async fn create_table(pool: &sqlx::PgPool, headers: &[String], table_name: &
         .collect::<Vec<_>>()
         .join(", ");
 
+    
     let query = format!(
-        "CREATE TABLE IF NOT EXISTS {} (id SERIAL PRIMARY KEY, {})",
+        "CREATE TABLE IF NOT EXISTS {} ({})",
         table_name, columns
     );
 
@@ -107,14 +107,52 @@ pub async fn create_table(pool: &sqlx::PgPool, headers: &[String], table_name: &
         .execute(pool)
         .await?;
 
+    if headers.contains(&String::from("origin")){
+        let query = format!(
+            "CREATE INDEX IF NOT EXISTS idx_{}_origin ON {} (origin)",
+            table_name, table_name
+        );
+        sqlx::query(&query)
+            .execute(pool)
+            .await?;
+    }
+    if headers.contains(&String::from("path")){
+        let query = format!(
+            "CREATE INDEX IF NOT EXISTS idx_{}_path ON {} (path)",
+            table_name, table_name
+        );
+        sqlx::query(&query)
+            .execute(pool)
+            .await?;
+    }
+    if headers.contains(&String::from("branch")){
+        let query = format!(
+            "CREATE INDEX IF NOT EXISTS idx_{}_branch ON {} (branch)",
+            table_name, table_name
+        );
+        sqlx::query(&query)
+            .execute(pool)
+            .await?;
+    }
+    if headers.contains(&String::from("normalized_branch")){
+        let query = format!(
+            "CREATE INDEX IF NOT EXISTS idx_{}_normalized_branch ON {} (normalized_branch)",
+            table_name, table_name
+        );
+        sqlx::query(&query)
+            .execute(pool)
+            .await?;
+    }
+
     println!("Table created or verified: {}", table_name);
     
     Ok(())
 }
 
-pub async fn process_csv_file(pool: &sqlx::PgPool, headers: &[String], file_path_str: &str, table_name: &str) -> Result<()>{
+pub async fn process_csv_file(pool: &sqlx::PgPool, headers: &[String], delimiter: u8, file_path_str: &str, table_name: &str) -> Result<()>{
     let mut reader = ReaderBuilder::new()
         .has_headers(true)
+        .delimiter(delimiter)
         .from_path(file_path_str)?;
     let len_error = Arc::new(Mutex::new(vec![]));
     for record in reader.records(){
@@ -206,7 +244,7 @@ pub async fn convert_modified_files(file_path: &str) -> Result<()>{
     let headers = get_csv_headers(file_path, b',')?;
     println!("{}: {:?}", table_name, headers);
     create_table(&pool, &headers, table_name).await?;
-    process_csv_file(&pool, &headers, file_path, table_name).await?;
+    process_csv_file(&pool, &headers, b',', file_path, table_name).await?;
     Ok(())
 }
 
@@ -245,8 +283,31 @@ pub async fn convert_altered_histories(directory_path: &str) -> Result<()>{
     for file in csv_files{
         let bar = bar.clone();
         bar.inc(1);
-        process_csv_file(&pool, &headers, &file, table_name).await?;
+        process_csv_file(&pool, &headers, b';', &file, table_name).await?;
     }
+
+    Ok(())
+}
+
+pub async fn convert_altered_histories_single_file(file_path: &str) -> Result<()>{
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .context("Failed to create pool.")?;
+
+    println!("Connected to the database!");
+
+
+    let headers = get_csv_headers(file_path, b',')?;
+    let table_name = "altered_histories_clean";
+    create_table(&pool, &headers, table_name).await?;
+    println!("{}: {:?}", table_name, headers);
+
+    process_csv_file(&pool, &headers, b',', file_path, table_name).await?;
 
     Ok(())
 }

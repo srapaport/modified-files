@@ -58,6 +58,11 @@ async fn main() -> Result<()> {
     // info!("Time elapsed: {:.2?}", start.elapsed());
 
     // models::convert_modified_files("./results/modified_files.csv").await
-    let directory_path = "/home/infres/rapaport/results/FULL_2024_08/focus/classes";
-    models::convert_altered_histories(directory_path).await
+    
+    // let directory_path = "/home/infres/rapaport/results/FULL_2024_08/focus/classes";
+    // models::convert_altered_histories(directory_path).await
+
+    let file_path = "/home/infres/rapaport/altered-history/python/res.csv";
+    models::convert_altered_histories_single_file(file_path).await
+    // started at 15:57
 }
