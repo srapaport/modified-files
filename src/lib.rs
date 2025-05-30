@@ -13,6 +13,36 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use swh_graph::graph::*;
 
+/// Retrieves file modification data from CSV files in a specified directory.
+///
+/// This function scans a directory for CSV files and extracts records containing "FileModified" entries.
+/// It processes multiple CSV files in parallel and aggregates the data into a concurrent hash map.
+///
+/// # Arguments
+///
+/// * `path` - The directory path containing CSV files to process
+///
+/// # Returns
+///
+/// * `Some(CHashMap)` - A concurrent hash map where:
+///   - Key: Origin URL (String)
+///   - Value: Vector of tuples containing (branch, revision, snapshot_without, file_path)
+/// * `None` - If the directory cannot be read or processed
+///
+/// # CSV Format Expected
+///
+/// The CSV files should have at least 8 columns with semicolon (`;`) delimiter:
+/// - Column 0: Origin URL
+/// - Column 1: Branch name
+/// - Column 2: Revision hash
+/// - Column 3: Snapshot without hash
+/// - Column 4: File path
+/// - Column 7: Event type (must contain "FileModified")
+///
+/// # Performance
+///
+/// Uses parallel processing with Rayon for improved performance when processing multiple CSV files.
+/// Progress information is printed to stdout including error counts and successful record counts.
 pub fn retrieve_file_modified(
     path: &str,
 ) -> Option<CHashMap<String, Vec<(String, String, String, String)>>> {
@@ -111,6 +141,43 @@ pub fn retrieve_file_modified(
     Some(res)
 }
 
+/// Processes all modified files data and generates a CSV report of altered file histories.
+///
+/// This function takes the aggregated file modification data and processes each entry through
+/// the Software Heritage graph to determine the actual file modification status. It compares
+/// file states between different snapshots to identify truly modified files versus unchanged ones.
+///
+/// # Arguments
+///
+/// * `data` - A concurrent hash map containing file modification data from `retrieve_file_modified`
+/// * `graph_t` - A reference to the Software Heritage bidirectional graph with loaded properties
+///
+/// # Type Parameters
+///
+/// * `G` - Must implement `SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph + Sync`
+///   with the following property traits:
+///   - `Maps`: For SWHID to node ID mapping
+///   - `LabelNames`: For edge label name resolution
+///   - `Strings`: For string property access
+///   - `Persons`: For person/author information
+///   - `Timestamps`: For temporal data
+///
+/// # Output
+///
+/// Creates a CSV file at `results/modified_files.csv` with the following columns:
+/// - `origin`: Origin URL
+/// - `revision`: Revision hash
+/// - `branch`: Branch name
+/// - `snapshot_without`: Snapshot hash without the changes
+/// - `path`: File path
+/// - `status`: Modification status (Modified, Found, etc.)
+///
+/// # Performance
+///
+/// - Uses parallel processing with Rayon for concurrent processing of multiple origins
+/// - Displays a progress bar showing processing status
+/// - Logs warnings for entries that cannot be processed
+/// - Reports final statistics including error counts
 pub fn all_modified<
     G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph + Sync,
 >(
