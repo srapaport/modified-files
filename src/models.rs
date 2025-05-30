@@ -680,14 +680,3 @@ pub async fn perso_query(file_path: &str) -> Result<()>{
 
     Ok(())
 }
-
-
-
-// #[allow(dead_code)]
-// pub async fn get_user(pool: &sqlx::PgPool, user_id: i32) -> Result<User, sqlx::Error> {
-//     let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
-//         .bind(user_id)
-//         .fetch_one(pool)
-//         .await?;
-//     Ok(user)
-// }
