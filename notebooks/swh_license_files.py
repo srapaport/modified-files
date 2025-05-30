@@ -11,8 +11,38 @@ import pandas as pd
 import pickle
 import hashlib
 from tqdm.auto import tqdm 
+import duckdb
+import time
 
 cache = {}
+
+def generate_swh_url(swhid, path, branch=None):
+    """
+    Generate a Software Heritage archive URL from a revision ID and path.
+    
+    Args:
+        swhid: A Software Hash ID (SWHID) of a revision or a snapshot
+        path: A file path, possibly with leading slashes
+        
+    Returns:
+        A URL to the file in the Software Heritage archive
+        
+        None if the swhid is incorrect
+    """
+
+    clean_path = path
+    if path.startswith('./'):
+        clean_path = path[2:]
+    elif path.startswith('/'):
+        clean_path = path[1:]
+    
+    if "swh:1:rev:" in swhid:
+        hash_part = swhid[swhid.find("swh:1:rev:") + 10:]
+        return f"https://archive.softwareheritage.org/browse/revision/{hash_part}/?path={clean_path}"
+    elif "swh:1:snp:" in swhid:
+        hash_part = swhid[swhid.find("swh:1:snp:") + 10:]
+        return f"https://archive.softwareheritage.org/browse/snapshot/{hash_part}/directory/?branch={branch}&path={clean_path}"
+    return None
 
 def get_raw_file_content(url):
     """
@@ -82,23 +112,28 @@ def detect_license(license):
         
         try:
             json_data = json.loads(result.stdout)
-
-            if 'files' in json_data and len(json_data['files']) > 0:
+            if 'license_detections' in json_data and len(json_data['license_detections']) > 0:
                 matches = {}
-                max_score = [0, 0]
-                for licence in json_data['files'][0]['license_detections']:
-                    for match in licence['matches']:
-                        matches[(match['score'], match['matched_length'])] = match['license_expression']
-                        if match['score'] > max_score[0]:
-                            max_score[0] = match['score']
-                            max_score[1] = match['matched_length']
-                        elif match['score'] == max_score[0]:
-                            max_score[1] = max(max_score[1], match['matched_length'])
-                if max_score != [0, 0]:
-                    license_scanned = matches[(max_score[0], max_score[1])]
-                    cache[h] = license_scanned
-                    return license_scanned
+                max_score = 0
+                for license in json_data['license_detections']: 
+                    
+                    for match in license['reference_matches']:
+                        max_score = max(max_score, match['score'])
+                        if match['license_expression'] not in matches:
+                            matches[match['license_expression']] = match['score']
+                        else:
+                            matches[match['license_expression']] = max(matches[match['license_expression']], match['score'])
+                if max_score < 80:
+                    return "Undetermined"
+                results = []
+                for (l, s) in matches.items():
+                    if s == max_score:
+                        results.append(l)
+                results.sort()
+                result_str = ", ".join(results)
+                return result_str
             return None
+        
         except json.JSONDecodeError:
             print("Failed to parse license detection output as JSON")
             return None
@@ -118,18 +153,18 @@ def single_url():
     else:
         print("Failed to retrieve raw content.", file=sys.stderr)
         
-def main():
-    ds = pd.read_csv("../results/repos_modified_path.csv", delimiter=';')
-    ds.drop_duplicates().reset_index()
-    
+def main(df):
     tqdm.pandas()
-    ds['Rev-License-Scanned'] = ds['Rev-License-Path'].progress_apply(lambda p: detect_license(get_raw_file_content(p)) if p else None)
-    with open("../results/results_full_part1.pkl", 'wb') as f:
-        pickle.dump(ds, f)
+    df['Rev-License-Scanned'] = df['Rev-License-Path'].progress_apply(lambda p: detect_license(get_raw_file_content(p)) if p else None)
+    with open("../../data/license_full_part1.pkl", 'wb') as f:
+        pickle.dump(df, f)
         
-    ds['Snap-License-Scanned'] = ds['Snap-License-Path'].progress_apply(lambda p: detect_license(get_raw_file_content(p)) if p else None)
-    with open("../results/results_full_part2.pkl", 'wb') as f:
-        pickle.dump(ds, f)
+    df['Snap-License-Scanned'] = df['Snap-License-Path'].progress_apply(lambda p: detect_license(get_raw_file_content(p)) if p else None)
+    with open("../../data/license_full_part2.pkl", 'wb') as f:
+        pickle.dump(df, f)
 
 if __name__ == "__main__":
-    main()
+    df = pd.DataFrame()
+    with open('../../data/license_files_with_path.pkl', 'rb') as f:
+        df = pickle.load(f)
+    main(df)
