@@ -11,52 +11,6 @@ use dotenv::dotenv;
 use futures::future::try_join_all;
 use std::time::{Duration, Instant};
 
-#[allow(dead_code)]
-#[derive(sqlx::FromRow)]
-pub struct User {
-    pub id: i32,
-    pub name: String,
-    pub email: String,
-}
-
-#[allow(dead_code)]
-pub async fn create_user(pool: &sqlx::PgPool, name: &str, email: &str) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT INTO users (name, email) VALUES ($1, $2)")
-        .bind(name)
-        .bind(email)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
-#[allow(dead_code)]
-pub async fn get_user(pool: &sqlx::PgPool, user_id: i32) -> Result<User, sqlx::Error> {
-    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_one(pool)
-        .await?;
-    Ok(user)
-}
-
-#[allow(dead_code)]
-pub async fn update_user_email(pool: &sqlx::PgPool, user_id: i32, new_email: &str) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE users SET email = $1 WHERE id = $2")
-        .bind(new_email)
-        .bind(user_id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
-#[allow(dead_code)]
-pub async fn delete_user(pool: &sqlx::PgPool, user_id: i32) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM users WHERE id = $1")
-        .bind(user_id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 pub fn get_csv_headers(csv_path: &str, delimiter: u8) -> Result<Vec<String>> {
     let file = File::open(csv_path).context("Failed to open CSV file")?;
     let mut rdr = ReaderBuilder::new()

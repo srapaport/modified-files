@@ -38,12 +38,7 @@ const RESULTS_PATH: &str = "";// /path/to/results/directory
 /// This async function orchestrates the complete workflow for analyzing altered file histories:
 ///
 /// 1. **Logging Setup**: Configures rotating file logs with error duplication to stderr
-/// 2. **Graph Loading**: Loads the Software Heritage bidirectional graph with all properties:
-///    - Node-to-ID mappings
-///    - Label names for edge metadata
-///    - String properties for textual data
-///    - Person information for authorship
-///    - Timestamp data for temporal analysis
+/// 2. **Graph Loading**: Loads the Software Heritage bidirectional graph with all properties
 /// 3. **File Analysis**: Processes modified files data through the graph
 /// 4. **Database Storage**: Converts results to PostgreSQL tables
 ///

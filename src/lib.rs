@@ -1,7 +1,6 @@
 pub mod env;
 pub mod models;
 mod file_modified;
-mod origin_grading;
 use chashmap::CHashMap;
 use csv::{ReaderBuilder, WriterBuilder};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -93,15 +92,7 @@ pub fn retrieve_file_modified(
             .into_iter()
             .for_each(|record| match record {
                 Ok(s) => {
-                    if s[7].contains("FileModified") {
-                        // debug!(
-                        //     "line upserted:\nori: {} | line: {},{},{},{}",
-                        //     String::from(&s[0]),
-                        //     String::from(&s[1]),
-                        //     String::from(&s[2]),
-                        //     String::from(&s[3]),
-                        //     String::from(&s[4])
-                        // );
+                    if s[7].contains("FileModified") || s[7].contains("FileRemoved") {
                         amount_file_modified.fetch_add(1, Ordering::Relaxed);
                         res.upsert(
                             String::from(&s[0]),
@@ -201,7 +192,7 @@ pub fn all_modified<
     let csv_wrt = Arc::new(Mutex::new(
         WriterBuilder::new()
             .has_headers(true)
-            .from_path("results/modified_files.csv")
+            .from_path("../data/modified_files.csv")
             .unwrap(),
     ));
     data.into_iter().par_bridge().for_each(|(url, lines)| {
@@ -294,52 +285,6 @@ pub fn single_modified<
         if status != env::Status::Found {
             csv_wrt.serialize(RowTmp { path, status }).unwrap();
         }
-    });
-    csv_wrt.flush().unwrap();
-}
-
-pub fn all_grade<
-    G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph + Sync,
->(
-    graph: &G,
-) where
-    <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
-    <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
-    <G as SwhGraphWithProperties>::Strings: swh_graph::properties::Strings,
-    <G as SwhGraphWithProperties>::Persons: swh_graph::properties::Persons,
-    <G as SwhGraphWithProperties>::Timestamps: swh_graph::properties::Timestamps,
-{
-    let mut csv_wrt = match WriterBuilder::new().from_path("results/grades.csv") {
-        Ok(writer) => writer,
-        Err(e) => {
-            error!("couldn't create csv file: {:?}", e);
-            return;
-        }
-    };
-    #[derive(Serialize)]
-    struct Row{
-        origin: String,
-        amount_contrib: usize,
-        amount_author: usize,
-        amount_committer: usize,
-        amount_snap: usize,
-        amount_rel: usize,
-        amount_rev: usize,
-        freq_snap: f64,
-        freq_rev: f64,
-    }
-    origin_grading::grades(graph).into_iter().for_each(|(url, stats)|{
-        csv_wrt.serialize(Row{
-            origin: url.clone(),
-            amount_contrib: stats.amount_contrib,
-            amount_author: stats.amount_author,
-            amount_committer: stats.amount_committer,
-            amount_snap: stats.amount_snap,
-            amount_rel: stats.amount_rel,
-            amount_rev: stats.amount_rev,
-            freq_snap: stats.freq_snap,
-            freq_rev: stats.freq_rev,
-        }).expect(&format!("Couldn't serialize stats for {}", url));
     });
     csv_wrt.flush().unwrap();
 }
