@@ -20,19 +20,22 @@ use swh_graph::graph::*;
 ///   - Value: Vector of tuples (snapshot_src, branch_name, missing_commit, snapshot_dst, sub_categories)
 pub async fn retrieve_file_changes(
     pool: &PgPool,
+    tables: &models::TableNames,
 ) -> Option<CHashMap<String, Vec<(String, String, String, String, String)>>> {
-    let rows: Vec<(String, String, String, String, String, String)> = match sqlx::query_as(
+    let q = format!(
         "SELECT origin, snapshot_src, branch_name, missing_commit, snapshot_dst, sub_categories
-         FROM altered_histories
+         FROM {}
          WHERE (sub_categories LIKE '%FileModified%' OR sub_categories LIKE '%FileRemoved%')
            AND status = 'classified'",
-    )
-    .fetch_all(pool)
-    .await
+        tables.altered_histories
+    );
+    let rows: Vec<(String, String, String, String, String, String)> = match sqlx::query_as(&q)
+        .fetch_all(pool)
+        .await
     {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Error querying altered_histories: {}", e);
+            eprintln!("Error querying {}: {}", tables.altered_histories, e);
             return None;
         }
     };
@@ -49,7 +52,7 @@ pub async fn retrieve_file_changes(
             },
         );
     }
-    println!("Retrieved {} records from altered_histories (FileModified + FileRemoved)", count);
+    println!("Retrieved {} records from {} (FileModified + FileRemoved)", count, tables.altered_histories);
     Some(res)
 }
 

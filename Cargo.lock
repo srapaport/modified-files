@@ -59,6 +59,7 @@ dependencies = [
  "log",
  "postgres",
  "rayon",
+ "regex",
  "serde",
  "sqlx",
  "swh-graph",

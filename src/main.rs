@@ -39,6 +39,9 @@ async fn main() -> Result<()> {
         .start()
         .unwrap();
 
+    let tables = models::TableNames::from_graph_path(GRAPH_PATH);
+    println!("Using tables: {:?}", tables);
+
     let pool = models::get_pool().await?;
 
     let graph_t = SwhBidirectionalGraph::new(PathBuf::from(GRAPH_PATH))
@@ -59,7 +62,7 @@ async fn main() -> Result<()> {
 
     let start = Instant::now();
 
-    let data = altered_history_analysis::retrieve_file_changes(&pool)
+    let data = altered_history_analysis::retrieve_file_changes(&pool, &tables)
         .await
         .expect("Failed to retrieve file changes from DB");
 
@@ -67,9 +70,9 @@ async fn main() -> Result<()> {
 
     info!("Graph analysis complete | time elapsed: {:.2?}", start.elapsed());
     println!("Graph analysis complete | time elapsed: {:.2?}", start.elapsed());
-    println!("Collected {} rows to insert into modified_files", rows.len());
+    println!("Collected {} rows to insert into {}", rows.len(), tables.modified_files);
 
-    models::insert_modified_files(&pool, &rows).await?;
+    models::insert_modified_files(&pool, &tables, &rows).await?;
 
     info!("All done.");
     Ok(())

@@ -1,10 +1,50 @@
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
+use regex::Regex;
 use sqlx::postgres::PgPoolOptions;
 use std::env;
 use dotenv::dotenv;
 
 use crate::env as app_env;
+
+/// Holds the suffixed table names derived from the graph timestamp.
+#[derive(Debug, Clone)]
+pub struct TableNames {
+    pub altered_histories: String,
+    pub modified_files: String,
+}
+
+/// Extracts a `YYYY_MM_DD` suffix from a graph path containing a date segment
+/// like `2025-05-18`. Falls back to an empty suffix if no date is found.
+pub fn extract_graph_suffix(graph_path: &str) -> String {
+    let re = Regex::new(r"(\d{4})-(\d{2})-(\d{2})").unwrap();
+    if let Some(caps) = re.captures(graph_path) {
+        format!("{}_{}_{}",
+            caps.get(1).unwrap().as_str(),
+            caps.get(2).unwrap().as_str(),
+            caps.get(3).unwrap().as_str(),
+        )
+    } else {
+        String::new()
+    }
+}
+
+impl TableNames {
+    pub fn from_graph_path(graph_path: &str) -> Self {
+        let suffix = extract_graph_suffix(graph_path);
+        if suffix.is_empty() {
+            TableNames {
+                altered_histories: "altered_histories".to_string(),
+                modified_files: "modified_files".to_string(),
+            }
+        } else {
+            TableNames {
+                altered_histories: format!("altered_histories_{}", suffix),
+                modified_files: format!("modified_files_{}", suffix),
+            }
+        }
+    }
+}
 
 pub async fn get_pool() -> Result<sqlx::PgPool> {
     dotenv().ok();
@@ -28,9 +68,13 @@ fn status_to_str(s: &app_env::Status) -> &'static str {
     }
 }
 
-pub async fn insert_modified_files(pool: &sqlx::PgPool, rows: &[app_env::Row]) -> Result<()> {
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS modified_files (
+pub async fn insert_modified_files(
+    pool: &sqlx::PgPool,
+    tables: &TableNames,
+    rows: &[app_env::Row],
+) -> Result<()> {
+    let q = format!(
+        "CREATE TABLE IF NOT EXISTS {} (
             id BIGSERIAL PRIMARY KEY,
             origin TEXT NOT NULL,
             revision TEXT NOT NULL,
@@ -40,22 +84,30 @@ pub async fn insert_modified_files(pool: &sqlx::PgPool, rows: &[app_env::Row]) -
             status TEXT NOT NULL,
             source_category TEXT NOT NULL
         )",
-    )
-    .execute(pool)
-    .await
-    .context("Failed to create modified_files table")?;
+        tables.modified_files
+    );
+    sqlx::query(&q)
+        .execute(pool)
+        .await
+        .context("Failed to create modified_files table")?;
 
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_mf_origin ON modified_files (origin)")
-        .execute(pool)
-        .await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_mf_path ON modified_files (path)")
-        .execute(pool)
-        .await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_mf_source_category ON modified_files (source_category)")
-        .execute(pool)
-        .await?;
+    let idx = format!(
+        "CREATE INDEX IF NOT EXISTS idx_{t}_origin ON {t} (origin)",
+        t = tables.modified_files
+    );
+    sqlx::query(&idx).execute(pool).await?;
+    let idx = format!(
+        "CREATE INDEX IF NOT EXISTS idx_{t}_path ON {t} (path)",
+        t = tables.modified_files
+    );
+    sqlx::query(&idx).execute(pool).await?;
+    let idx = format!(
+        "CREATE INDEX IF NOT EXISTS idx_{t}_source_category ON {t} (source_category)",
+        t = tables.modified_files
+    );
+    sqlx::query(&idx).execute(pool).await?;
 
-    println!("Table modified_files created or verified.");
+    println!("Table {} created or verified.", tables.modified_files);
 
     if rows.is_empty() {
         println!("No rows to insert.");
@@ -69,7 +121,13 @@ pub async fn insert_modified_files(pool: &sqlx::PgPool, rows: &[app_env::Row]) -
         )
         .unwrap(),
     );
-    bar.set_message("Inserting into modified_files");
+    bar.set_message(format!("Inserting into {}", tables.modified_files));
+
+    let insert_q = format!(
+        "INSERT INTO {} (origin, revision, branch, snapshot_without, path, status, source_category)
+         SELECT * FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])",
+        tables.modified_files
+    );
 
     for chunk in rows.chunks(1000) {
         let mut origins: Vec<&str> = Vec::with_capacity(chunk.len());
@@ -90,25 +148,22 @@ pub async fn insert_modified_files(pool: &sqlx::PgPool, rows: &[app_env::Row]) -
             source_categories.push(&row.source_category);
         }
 
-        sqlx::query(
-            "INSERT INTO modified_files (origin, revision, branch, snapshot_without, path, status, source_category)
-             SELECT * FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])",
-        )
-        .bind(&origins)
-        .bind(&revisions)
-        .bind(&branches)
-        .bind(&snapshot_withouts)
-        .bind(&paths)
-        .bind(&statuses)
-        .bind(&source_categories)
-        .execute(pool)
-        .await
-        .context("Failed to batch insert modified files")?;
+        sqlx::query(&insert_q)
+            .bind(&origins)
+            .bind(&revisions)
+            .bind(&branches)
+            .bind(&snapshot_withouts)
+            .bind(&paths)
+            .bind(&statuses)
+            .bind(&source_categories)
+            .execute(pool)
+            .await
+            .context("Failed to batch insert modified files")?;
 
         bar.inc(chunk.len() as u64);
     }
 
-    bar.finish_with_message("Done inserting into modified_files");
-    println!("Inserted {} rows into modified_files", rows.len());
+    bar.finish_with_message(format!("Done inserting into {}", tables.modified_files));
+    println!("Inserted {} rows into {}", rows.len(), tables.modified_files);
     Ok(())
 }
