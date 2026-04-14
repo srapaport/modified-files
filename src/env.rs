@@ -18,6 +18,7 @@ pub struct Row {
     pub snapshot_without: String,
     pub path: String,
     pub status: Status,
+    pub source_category: String,
 }
 
 #[derive(Serialize, Default)]
