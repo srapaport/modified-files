@@ -2,3 +2,4 @@
 /logs
 /results
 .env
+*.env
