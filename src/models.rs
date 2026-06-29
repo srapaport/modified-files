@@ -543,7 +543,62 @@ pub async fn convert_altered_histories(directory_path: &str) -> Result<()>{
     Ok(())
 }
 
-pub async fn convert_altered_histories_single_file(file_path: &str) -> Result<()>{
+/// Copies classified rows from altered-history's suffixed table into the
+/// normalized `altered_histories` table used by downstream analysis.
+pub async fn copy_classified_altered_histories(source_table: &str) -> Result<()> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .context("Failed to create pool.")?;
+
+    println!("Connected to the database!");
+
+    let headers = vec![
+        "origin".to_string(),
+        "snapshot_src".to_string(),
+        "branch_name".to_string(),
+        "missing_commit".to_string(),
+        "snapshot_dst".to_string(),
+        "first_difference".to_string(),
+        "main_category".to_string(),
+        "sub_categories".to_string(),
+    ];
+    let table_name = "altered_histories";
+    create_table(&pool, &headers, table_name).await?;
+
+    sqlx::query(&format!("TRUNCATE TABLE {}", table_name))
+        .execute(&pool)
+        .await
+        .context("Failed to truncate altered_histories table")?;
+
+    let q = format!(
+        "INSERT INTO {} (origin, snapshot_src, branch_name, missing_commit, snapshot_dst,
+                         first_difference, main_category, sub_categories)
+         SELECT origin, snapshot_src, branch_name, missing_commit, snapshot_dst,
+                first_difference, main_category, sub_categories
+         FROM {} WHERE status = 'classified'",
+        table_name, source_table
+    );
+    let result = sqlx::query(&q).execute(&pool).await.context(format!(
+        "Failed to copy classified rows from {}",
+        source_table
+    ))?;
+
+    println!(
+        "Copied {} classified rows from {} into {}",
+        result.rows_affected(),
+        source_table,
+        table_name
+    );
+
+    Ok(())
+}
+
+pub async fn convert_altered_histories_single_file(file_path: &str) -> Result<()> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 

@@ -1,52 +1,162 @@
+pub mod db;
 pub mod env;
 pub mod models;
 mod file_modified;
 mod origin_grading;
-use chashmap::CHashMap;
 use csv::{ReaderBuilder, WriterBuilder};
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{error, info, warn};
-use rayon::prelude::*;
+use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::Serialize;
+use sqlx::PgPool;
+use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use swh_graph::graph::*;
 
+/// Default path for the legacy CSV export path (`all_modified`).
+pub const MODIFIED_FILES_CSV: &str = "results/modified_files.csv";
+
+/// Commit tuple: (snapshot_src, branch_name, missing_commit, snapshot_dst)
+pub type CommitLine = (String, String, String, String);
+
+pub fn is_file_change_subcategories(sub_categories: &str) -> bool {
+    sub_categories.contains("FileModified") || sub_categories.contains("FileRemoved")
+}
+
+fn collect_commit_rows<G>(
+    origin: &str,
+    line: CommitLine,
+    graph_t: &G,
+    amount_err_compare: &AtomicUsize,
+) -> Vec<env::Row>
+where
+    G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph + Sync,
+    <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
+    <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
+    <G as SwhGraphWithProperties>::Strings: swh_graph::properties::Strings,
+    <G as SwhGraphWithProperties>::Persons: swh_graph::properties::Persons,
+    <G as SwhGraphWithProperties>::Timestamps: swh_graph::properties::Timestamps,
+{
+    let Some(paths) = file_modified::map_commit(line.clone(), graph_t) else {
+        amount_err_compare.fetch_add(1, Ordering::Relaxed);
+        return Vec::new();
+    };
+    let Some(res) = file_modified::compare_paths(&line.3, &line.1, &paths, graph_t) else {
+        warn!(
+            "Couldn't compare paths for url: {} and snap_dst: {} and branch: {}",
+            origin, line.3, line.1
+        );
+        amount_err_compare.fetch_add(1, Ordering::Relaxed);
+        return Vec::new();
+    };
+    res.into_iter()
+        .filter(|(_, status)| *status != env::Status::Found)
+        .map(|(path, status)| env::Row {
+            origin: origin.to_string(),
+            revision: line.2.clone(),
+            branch: line.1.clone(),
+            snapshot_without: line.3.clone(),
+            path,
+            status,
+        })
+        .collect()
+}
+
+fn write_rows_to_csv(
+    rows: &[env::Row],
+    csv_wrt: &Arc<Mutex<csv::Writer<std::fs::File>>>,
+) {
+    if rows.is_empty() {
+        return;
+    }
+    if let Ok(mut writer) = csv_wrt.lock() {
+        for row in rows {
+            if let Err(e) = writer.serialize(row) {
+                error!("Failed to write row: {}", e);
+            }
+        }
+        if let Err(e) = writer.flush() {
+            error!("Failed to flush writer: {}", e);
+        }
+    }
+}
+
+fn open_modified_files_writer(output_path: &str) -> Arc<Mutex<csv::Writer<std::fs::File>>> {
+    if let Some(parent) = Path::new(output_path).parent() {
+        fs::create_dir_all(parent).expect("Failed to create output directory");
+    }
+    Arc::new(Mutex::new(
+        WriterBuilder::new()
+            .has_headers(true)
+            .from_path(output_path)
+            .unwrap_or_else(|e| panic!("Failed to open {}: {}", output_path, e)),
+    ))
+}
+
+fn worker_thread_pool() -> ThreadPool {
+    let workers = (num_cpus::get() / 3).max(1);
+    ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .expect("Failed to build rayon thread pool")
+}
+
+fn print_compare_stats(amount_err_compare: &AtomicUsize) {
+    println!(
+        "Amount of altered commits that weren't checked: {}",
+        amount_err_compare.load(Ordering::Relaxed)
+    );
+    info!(
+        "Amount of altered commits that weren't checked: {}",
+        amount_err_compare.load(Ordering::Relaxed)
+    );
+    println!(
+        "Amount of branch without name: {}",
+        env::ERR_BRANCH.load(Ordering::Relaxed)
+    );
+    info!(
+        "Amount of branch without name: {}",
+        env::ERR_BRANCH.load(Ordering::Relaxed)
+    );
+}
+
+/// Process a bounded batch of commits grouped by origin (legacy CSV aggregation path).
+pub fn process_modified_batch<
+    G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph + Sync,
+>(
+    batch: HashMap<String, Vec<CommitLine>>,
+    graph_t: &G,
+    csv_wrt: &Arc<Mutex<csv::Writer<std::fs::File>>>,
+    thread_pool: &ThreadPool,
+    amount_err_compare: &AtomicUsize,
+    bar: &ProgressBar,
+) where
+    <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
+    <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
+    <G as SwhGraphWithProperties>::Strings: swh_graph::properties::Strings,
+    <G as SwhGraphWithProperties>::Persons: swh_graph::properties::Persons,
+    <G as SwhGraphWithProperties>::Timestamps: swh_graph::properties::Timestamps,
+{
+    thread_pool.install(|| {
+        batch.into_iter().for_each(|(origin, lines)| {
+            for line in lines {
+                let rows = collect_commit_rows(&origin, line, graph_t, amount_err_compare);
+                write_rows_to_csv(&rows, csv_wrt);
+            }
+            bar.inc(1);
+        });
+    });
+}
+
 /// Retrieves file modification data from CSV files in a specified directory.
 ///
-/// This function scans a directory for CSV files and extracts records containing "FileModified" entries.
-/// It processes multiple CSV files in parallel and aggregates the data into a concurrent hash map.
-///
-/// # Arguments
-///
-/// * `path` - The directory path containing CSV files to process
-///
-/// # Returns
-///
-/// * `Some(CHashMap)` - A concurrent hash map where:
-///   - Key: Origin URL (String)
-///   - Value: Vector of tuples containing (branch, revision, snapshot_without, file_path)
-/// * `None` - If the directory cannot be read or processed
-///
-/// # CSV Format Expected
-///
-/// The CSV files should have at least 8 columns with semicolon (`;`) delimiter:
-/// - Column 0: Origin URL
-/// - Column 1: Branch name
-/// - Column 2: Revision hash
-/// - Column 3: Snapshot without hash
-/// - Column 4: File path
-/// - Column 7: Event type (must contain "FileModified")
-///
-/// # Performance
-///
-/// Uses parallel processing with Rayon for improved performance when processing multiple CSV files.
-/// Progress information is printed to stdout including error counts and successful record counts.
-pub fn retrieve_file_modified(
-    path: &str,
-) -> Option<CHashMap<String, Vec<(String, String, String, String)>>> {
-    let res = CHashMap::with_capacity(1024);
+/// Legacy path: loads all matching rows into memory. Prefer `all_modified_from_db` for
+/// full-graph runs to avoid OOM.
+pub fn retrieve_file_modified(path: &str) -> Option<HashMap<String, Vec<CommitLine>>> {
+    let res: Mutex<HashMap<String, Vec<CommitLine>>> = Mutex::new(HashMap::new());
     let dir_entries = match fs::read_dir(path) {
         Ok(entries) => match entries.collect::<Result<Vec<_>, _>>() {
             Ok(collected_entries) => collected_entries,
@@ -63,6 +173,8 @@ pub fn retrieve_file_modified(
 
     let amount_err_record = AtomicUsize::new(0);
     let amount_file_modified = AtomicUsize::new(0);
+
+    use rayon::prelude::*;
 
     dir_entries.into_par_iter().for_each(|entry| {
         let file_path = entry.path();
@@ -93,35 +205,18 @@ pub fn retrieve_file_modified(
             .into_iter()
             .for_each(|record| match record {
                 Ok(s) => {
-                    if s[7].contains("FileModified") {
-                        // debug!(
-                        //     "line upserted:\nori: {} | line: {},{},{},{}",
-                        //     String::from(&s[0]),
-                        //     String::from(&s[1]),
-                        //     String::from(&s[2]),
-                        //     String::from(&s[3]),
-                        //     String::from(&s[4])
-                        // );
+                    if s.len() > 7 && is_file_change_subcategories(&s[7]) {
                         amount_file_modified.fetch_add(1, Ordering::Relaxed);
-                        res.upsert(
-                            String::from(&s[0]),
-                            || {
-                                vec![(
-                                    String::from(&s[1]),
-                                    String::from(&s[2]),
-                                    String::from(&s[3]),
-                                    String::from(&s[4]),
-                                )]
-                            },
-                            |vec| {
-                                vec.push((
-                                    String::from(&s[1]),
-                                    String::from(&s[2]),
-                                    String::from(&s[3]),
-                                    String::from(&s[4]),
-                                ));
-                            },
+                        let origin = String::from(&s[0]);
+                        let line = (
+                            String::from(&s[1]),
+                            String::from(&s[2]),
+                            String::from(&s[3]),
+                            String::from(&s[4]),
                         );
+                        if let Ok(mut map) = res.lock() {
+                            map.entry(origin).or_default().push(line);
+                        }
                     }
                 }
                 Err(e) => {
@@ -138,51 +233,16 @@ pub fn retrieve_file_modified(
         "Amount of commits with at least 1 altered file: {}",
         amount_file_modified.load(Ordering::Relaxed)
     );
-    Some(res)
+    Some(res.into_inner().unwrap_or_else(|e| e.into_inner()))
 }
 
-/// Processes all modified files data and generates a CSV report of altered file histories.
-///
-/// This function takes the aggregated file modification data and processes each entry through
-/// the Software Heritage graph to determine the actual file modification status. It compares
-/// file states between different snapshots to identify truly modified files versus unchanged ones.
-///
-/// # Arguments
-///
-/// * `data` - A concurrent hash map containing file modification data from `retrieve_file_modified`
-/// * `graph_t` - A reference to the Software Heritage bidirectional graph with loaded properties
-///
-/// # Type Parameters
-///
-/// * `G` - Must implement `SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph + Sync`
-///   with the following property traits:
-///   - `Maps`: For SWHID to node ID mapping
-///   - `LabelNames`: For edge label name resolution
-///   - `Strings`: For string property access
-///   - `Persons`: For person/author information
-///   - `Timestamps`: For temporal data
-///
-/// # Output
-///
-/// Creates a CSV file at `results/modified_files.csv` with the following columns:
-/// - `origin`: Origin URL
-/// - `revision`: Revision hash
-/// - `branch`: Branch name
-/// - `snapshot_without`: Snapshot hash without the changes
-/// - `path`: File path
-/// - `status`: Modification status (Modified, Found, etc.)
-///
-/// # Performance
-///
-/// - Uses parallel processing with Rayon for concurrent processing of multiple origins
-/// - Displays a progress bar showing processing status
-/// - Logs warnings for entries that cannot be processed
-/// - Reports final statistics including error counts
+/// Processes aggregated commit data and writes graph-verified file rows to CSV.
 pub fn all_modified<
     G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph + Sync,
 >(
-    data: CHashMap<String, Vec<(String, String, String, String)>>,
+    data: HashMap<String, Vec<CommitLine>>,
     graph_t: &G,
+    output_path: &str,
 ) where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
@@ -198,69 +258,107 @@ pub fn all_modified<
         .unwrap(),
     );
     let amount_err_compare = AtomicUsize::new(0);
-    let csv_wrt = Arc::new(Mutex::new(
-        WriterBuilder::new()
-            .has_headers(true)
-            .from_path("results/modified_files.csv")
-            .unwrap(),
-    ));
-    data.into_iter().par_bridge().for_each(|(url, lines)| {
-        let csv_wrt = csv_wrt.clone();
-        lines.into_iter().for_each(|line| {
-            let paths = file_modified::map_commit(line.clone(), graph_t).unwrap();
-            let Some(res) = file_modified::compare_paths(&line.3, &line.1, &paths, graph_t) else {
-                warn!(
-                    "Couldn't compare paths for url: {} and snap_dst: {} and branch: {}",
-                    url, line.3, line.1
-                );
-                amount_err_compare.fetch_add(1, Ordering::Relaxed);
-                return;
-            };
-            let rows_to_write: Vec<_> = res
-                .into_iter()
-                .filter(|(_, status)| *status != env::Status::Found)
-                .map(|(path, status)| env::Row {
-                    origin: url.clone(),
-                    revision: line.2.clone(),
-                    branch: line.1.clone(),
-                    snapshot_without: line.3.clone(),
-                    path,
-                    status,
-                })
-                .collect();
+    let csv_wrt = open_modified_files_writer(output_path);
+    let thread_pool = worker_thread_pool();
+    process_modified_batch(
+        data,
+        graph_t,
+        &csv_wrt,
+        &thread_pool,
+        &amount_err_compare,
+        &bar,
+    );
+    bar.finish_with_message("Done");
+    print_compare_stats(&amount_err_compare);
+}
 
-            if !rows_to_write.is_empty() {
-                if let Ok(mut writer) = csv_wrt.lock() {
-                    for row in rows_to_write {
-                        if let Err(e) = writer.serialize(row) {
-                            error!("Failed to write row: {}", e);
-                        }
+/// Stream classified commits from altered-history PostgreSQL in bounded pages,
+/// verify file changes through the graph, and write results directly to PostgreSQL.
+pub async fn all_modified_from_db<
+    G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph + Sync,
+>(
+    pool: &PgPool,
+    tables: &db::TableNames,
+    graph_t: &G,
+    batch_size: i64,
+) where
+    <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
+    <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
+    <G as SwhGraphWithProperties>::Strings: swh_graph::properties::Strings,
+    <G as SwhGraphWithProperties>::Persons: swh_graph::properties::Persons,
+    <G as SwhGraphWithProperties>::Timestamps: swh_graph::properties::Timestamps,
+{
+    use rayon::prelude::*;
+
+    db::create_modified_files_table(pool, &tables.modified_files)
+        .await
+        .expect("Failed to create modified_files table");
+    db::truncate_modified_files(pool, &tables.modified_files)
+        .await
+        .expect("Failed to truncate modified_files table");
+
+    let total = db::count_file_change_commits(pool, tables)
+        .await
+        .expect("Failed to count file-change commits");
+    println!(
+        "File-change commits to process: {} -> table {}",
+        total, tables.modified_files
+    );
+
+    let bar = ProgressBar::new(total);
+    bar.set_style(
+        ProgressStyle::with_template(
+            "{msg} {wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}",
+        )
+        .unwrap(),
+    );
+
+    let amount_err_compare = AtomicUsize::new(0);
+    let thread_pool = worker_thread_pool();
+
+    let mut after_id: i64 = 0;
+    let mut total_rows_written: u64 = 0;
+    loop {
+        let page = db::load_file_change_commits_after(pool, tables, after_id, batch_size)
+            .await
+            .expect("Failed to load file-change commits page");
+        if page.is_empty() {
+            break;
+        }
+        after_id = page.last().unwrap().0;
+
+        let page_rows = Mutex::new(Vec::new());
+        thread_pool.install(|| {
+            page.par_iter().for_each(
+                |(_id, origin, snapshot_src, branch_name, missing_commit, snapshot_dst)| {
+                    let line = (
+                        snapshot_src.clone(),
+                        branch_name.clone(),
+                        missing_commit.clone(),
+                        snapshot_dst.clone(),
+                    );
+                    let rows = collect_commit_rows(origin, line, graph_t, &amount_err_compare);
+                    if let Ok(mut buffer) = page_rows.lock() {
+                        buffer.extend(rows);
                     }
-                    if let Err(e) = writer.flush() {
-                        error!("Failed to flush writer: {}", e);
-                    }
-                }
-            }
+                    bar.inc(1);
+                },
+            );
         });
-        bar.inc(1);
-    });
+
+        let rows = page_rows.into_inner().unwrap_or_default();
+        total_rows_written += rows.len() as u64;
+        db::batch_insert_modified_files(pool, &tables.modified_files, &rows)
+            .await
+            .expect("Failed to insert modified file rows");
+    }
+
     bar.finish_with_message("Done");
     println!(
-        "Amount of altered commits that weren't checked: {}",
-        amount_err_compare.load(Ordering::Relaxed)
+        "Inserted {} file-level rows into {}",
+        total_rows_written, tables.modified_files
     );
-    info!(
-        "Amount of altered commits that weren't checked: {}",
-        amount_err_compare.load(Ordering::Relaxed)
-    );
-    println!(
-        "Amount of branch without name: {}",
-        env::ERR_BRANCH.load(Ordering::Relaxed)
-    );
-    info!(
-        "Amount of branch without name: {}",
-        env::ERR_BRANCH.load(Ordering::Relaxed)
-    );
+    print_compare_stats(&amount_err_compare);
 }
 
 pub fn single_modified<

@@ -10,6 +10,16 @@ pub enum Status {
     Found,
 }
 
+impl Status {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Status::NotFound => "NotFound",
+            Status::Modified => "Modified",
+            Status::Found => "Found",
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Row {
     pub origin: String,
