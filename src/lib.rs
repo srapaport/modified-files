@@ -42,8 +42,16 @@ pub async fn retrieve_file_changes(
 
     let res = CHashMap::with_capacity(1024);
     let mut count = 0usize;
+    let mut file_modified_commits = 0usize;
+    let mut file_removed_commits = 0usize;
     for (origin, snapshot_src, branch_name, missing_commit, snapshot_dst, sub_categories) in rows {
         count += 1;
+        if sub_categories.contains("FileModified") {
+            file_modified_commits += 1;
+        }
+        if sub_categories.contains("FileRemoved") {
+            file_removed_commits += 1;
+        }
         res.upsert(
             origin,
             || vec![(snapshot_src.clone(), branch_name.clone(), missing_commit.clone(), snapshot_dst.clone(), sub_categories.clone())],
@@ -52,17 +60,42 @@ pub async fn retrieve_file_changes(
             },
         );
     }
-    println!("Retrieved {} records from {} (FileModified + FileRemoved)", count, tables.altered_histories);
+    println!(
+        "Retrieved {} records from {} (FileModified commits: {}, FileRemoved commits: {}; rows may match both)",
+        count, tables.altered_histories, file_modified_commits, file_removed_commits
+    );
     Some(res)
 }
 
-fn extract_source_category(sub_categories: &str) -> String {
+/// Returns every file-change sub-category present in the altered_histories row.
+fn extract_source_categories(sub_categories: &str) -> String {
+    let mut categories = Vec::new();
     if sub_categories.contains("FileModified") {
-        "FileModified".to_string()
-    } else if sub_categories.contains("FileRemoved") {
-        "FileRemoved".to_string()
-    } else {
+        categories.push("FileModified");
+    }
+    if sub_categories.contains("FileRemoved") {
+        categories.push("FileRemoved");
+    }
+    if categories.is_empty() {
         "Unknown".to_string()
+    } else {
+        categories.join(",")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_source_categories;
+
+    #[test]
+    fn source_categories_include_both_when_present() {
+        assert_eq!(
+            extract_source_categories(",FileRemoved,FileModified"),
+            "FileModified,FileRemoved"
+        );
+        assert_eq!(extract_source_categories(",FileRemoved"), "FileRemoved");
+        assert_eq!(extract_source_categories(",FileModified"), "FileModified");
+        assert_eq!(extract_source_categories(",Author"), "Unknown");
     }
 }
 
@@ -109,7 +142,7 @@ where
                 amount_err_compare.fetch_add(1, Ordering::Relaxed);
                 return;
             };
-            let source_cat = extract_source_category(&line.4);
+            let source_cat = extract_source_categories(&line.4);
             let rows_to_add: Vec<_> = res
                 .into_iter()
                 .filter(|(_, status)| *status != env::Status::Found)
@@ -202,7 +235,7 @@ pub fn all_grade<
     <G as SwhGraphWithProperties>::Persons: swh_graph::properties::Persons,
     <G as SwhGraphWithProperties>::Timestamps: swh_graph::properties::Timestamps,
 {
-    let mut csv_wrt = match WriterBuilder::new().from_path("results/grades.csv") {
+    let mut csv_wrt = match WriterBuilder::new().from_path("results_2026_03_02/grades.csv") {
         Ok(writer) => writer,
         Err(e) => {
             error!("couldn't create csv file: {:?}", e);

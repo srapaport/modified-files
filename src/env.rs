@@ -2,7 +2,7 @@ use std::sync::atomic::AtomicUsize;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Default, Serialize, PartialEq, Deserialize)]
+#[derive(Default, Debug, Serialize, PartialEq, Deserialize)]
 pub enum Status {
     #[default]
     NotFound,
@@ -10,7 +10,7 @@ pub enum Status {
     Found,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Row {
     pub origin: String,
     pub revision: String,

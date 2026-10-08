@@ -91,6 +91,15 @@ pub async fn insert_modified_files(
         .await
         .context("Failed to create modified_files table")?;
 
+    let alter_q = format!(
+        "ALTER TABLE {} ADD COLUMN IF NOT EXISTS source_category TEXT NOT NULL DEFAULT 'Unknown'",
+        tables.modified_files
+    );
+    sqlx::query(&alter_q)
+        .execute(pool)
+        .await
+        .context("Failed to add source_category column")?;
+
     let idx = format!(
         "CREATE INDEX IF NOT EXISTS idx_{t}_origin ON {t} (origin)",
         t = tables.modified_files

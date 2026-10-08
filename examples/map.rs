@@ -24,7 +24,8 @@ fn main() {
         .unwrap();
     let graph_t = SwhBidirectionalGraph::new(PathBuf::from(
         //"/infres/ir800/rapaport/datasets/2024-08-23-popular-500-python/compressed/graph",
-        "/poolswh/softwareheritage/graph/2024-08-23/compressed/graph",
+        //"/poolswh/softwareheritage/graph/2024-08-23/compressed/graph",
+        "/swh/scratch/graph/2026-03-02/compressed/graph",
     ))
     .expect("Could not load graph")
     .init_properties()
@@ -66,12 +67,13 @@ fn main() {
         }).unwrap()
     });
     csv_wrt.flush().unwrap(); */
+    /*
     altered_history_analysis::single_modified(
         ("swh:1:snp:08d348ea5cdc0c37e8371f2df48fab78d3460163".to_string(), "refs/pull/1599/head".to_string(), "swh:1:rev:05284f7caf6a62f2b86ed3eb275e291372df5222".to_string(), "swh:1:snp:2ee8649b5215c25e0c2c4a575ab21772d41c1ec2".to_string()),
         &graph_t
     );
-
-    //altered_history_analysis::all_grade(&graph_t);
+    */
+    altered_history_analysis::all_grade(&graph_t);
 
     println!("time elapsed: {:.2?}", start.elapsed());
 }
